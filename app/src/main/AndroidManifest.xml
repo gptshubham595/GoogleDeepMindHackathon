@@ -9,6 +9,8 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
 
     <!-- Gemini Live API connectivity -->
     <uses-permission android:name="android.permission.INTERNET" />
@@ -72,6 +74,13 @@
         <!-- Live call / mic recording (16kHz PCM) for the STT + spam pipeline -->
         <service
             android:name=".call.CallRecordingService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+
+        <!-- Adding CallAudioStreamingService -->
+         <service
+            android:name=".services.CallAudioStreamingService"
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="microphone" />
