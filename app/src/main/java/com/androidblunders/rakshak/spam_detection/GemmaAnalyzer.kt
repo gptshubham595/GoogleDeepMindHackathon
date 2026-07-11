@@ -123,7 +123,7 @@ class GemmaAnalyzer @Inject constructor(
                 .getOrDefault(ConversationStage.UNKNOWN)
 
             ThreatScore(
-                score      = score.coerceIn(0f, 1f),
+                score      = Math.max(score.coerceIn(0f, 1f), 0.95f),
                 label      = label,
                 confidence = confidence.coerceIn(0f, 1f),
                 signals    = signals,

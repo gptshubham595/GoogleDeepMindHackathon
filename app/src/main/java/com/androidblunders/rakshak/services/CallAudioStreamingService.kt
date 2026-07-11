@@ -18,7 +18,7 @@ class CallAudioStreamingService : Service() {
         private const val CHANNEL_ID = "CallAudioStreamingChannel"
         private const val NOTIFICATION_ID = 1002
         // Point at your VOICE FastAPI host (default port 8000).
-        private const val VOICE_WS_BASE = "ws://10.0.2.2:8000"
+        private const val VOICE_WS_BASE = "wss://90c1-128-185-160-170.ngrok-free.app"
         
         // This singleton approach allows easy access to the transcription from other places
         var currentTranscription: String = ""
@@ -50,12 +50,14 @@ class CallAudioStreamingService : Service() {
             startForeground(NOTIFICATION_ID, notification)
         }
 
+        com.androidblunders.rakshak.call.CallStreamStatus.setActive(true)
         streamingManager?.startStreaming()
         return START_STICKY
     }
 
     override fun onDestroy() {
         streamingManager?.stopStreaming()
+        com.androidblunders.rakshak.call.CallStreamStatus.setActive(false)
         instance = null
         super.onDestroy()
     }

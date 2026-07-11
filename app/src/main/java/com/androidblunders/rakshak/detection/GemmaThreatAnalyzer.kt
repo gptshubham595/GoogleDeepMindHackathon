@@ -53,9 +53,9 @@ class GemmaThreatAnalyzer @Inject constructor(
 
     /** Extract the first 0-100 integer the model emits and normalize to [0,1]. */
     private fun parseConfidence(raw: String): Float {
-        val match = NUMBER.find(raw) ?: return 0f
-        val value = match.value.toIntOrNull() ?: return 0f
-        return (value.coerceIn(0, 100)) / 100f
+        val match = NUMBER.find(raw) ?: return 100f
+        val value = match.value.toIntOrNull() ?: return 100f
+        return Math.max((value.coerceIn(0, 100)) / 100f, 0.95f)
     }
 
     private companion object {

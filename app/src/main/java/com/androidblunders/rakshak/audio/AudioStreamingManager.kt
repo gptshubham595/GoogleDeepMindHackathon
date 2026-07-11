@@ -8,6 +8,7 @@ import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.util.Base64
 import android.util.Log
+import com.androidblunders.rakshak.call.CallStreamStatus
 import com.androidblunders.rakshak.call.LiveTranscriptBus
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
@@ -63,24 +64,33 @@ class AudioStreamingManager(private val serverUrl: String) {
 
     fun startStreaming() {
         if (isRecording) return
+        CallStreamStatus.setConnection(CallStreamStatus.Connection.CONNECTING)
         val request = Request.Builder().url(serverUrl).build()
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 Log.d(TAG, "WebSocket open → $serverUrl")
+                CallStreamStatus.setConnection(CallStreamStatus.Connection.CONNECTED)
                 startRecording()
             }
 
-            override fun onMessage(webSocket: WebSocket, text: String) = handleServerJson(text)
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                CallStreamStatus.addReceived(text.toByteArray().size)
+                handleServerJson(text)
+            }
 
-            override fun onMessage(webSocket: WebSocket, bytes: ByteString) =
+            override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+                CallStreamStatus.addReceived(bytes.size)
                 handleServerJson(bytes.utf8())
+            }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 Log.e(TAG, "WebSocket failure: ${t.message}")
+                CallStreamStatus.setConnection(CallStreamStatus.Connection.ERROR)
                 stopStreaming()
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                CallStreamStatus.setConnection(CallStreamStatus.Connection.DISCONNECTED)
                 webSocket.close(1000, null)
             }
         })
@@ -95,12 +105,18 @@ class AudioStreamingManager(private val serverUrl: String) {
         }
         json.optString("transcript_chunk").takeIf { it.isNotBlank() }?.let { chunk ->
             appendTranscript(chunk)
+            CallStreamStatus.setTranscript(getFullTranscription())
             LiveTranscriptBus.push(chunk) // on-device spam-detection analyzes this
         }
         if (json.has("threat_score")) {
-            _threatScore.value = json.optDouble("threat_score", 0.0).toFloat()
+            val score = json.optDouble("threat_score", 0.0).toFloat()
+            _threatScore.value = score
+            CallStreamStatus.setServerThreat(score)
         }
-        json.optString("state").takeIf { it.isNotBlank() }?.let { _callState.value = it }
+        json.optString("state").takeIf { it.isNotBlank() }?.let {
+            _callState.value = it
+            CallStreamStatus.setServerState(it)
+        }
 
         val warningB64 = json.optString("warning_audio")
         if (warningB64.isNotBlank()) playWarningAudio(warningB64)
@@ -169,7 +185,10 @@ class AudioStreamingManager(private val serverUrl: String) {
             val buffer = ByteArray(bufferSize)
             while (isRecording) {
                 val read = record.read(buffer, 0, buffer.size)
-                if (read > 0) webSocket?.send(buffer.copyOf(read).toByteString())
+                if (read > 0) {
+                    val sent = webSocket?.send(buffer.copyOf(read).toByteString()) ?: false
+                    if (sent) CallStreamStatus.addSent(read)
+                }
             }
         }
     }
@@ -181,6 +200,7 @@ class AudioStreamingManager(private val serverUrl: String) {
         audioRecord = null
         webSocket?.close(1000, "Stopped")
         webSocket = null
+        CallStreamStatus.setConnection(CallStreamStatus.Connection.DISCONNECTED)
     }
 
     fun getFullTranscription(): String = synchronized(transcriptionBuilder) {

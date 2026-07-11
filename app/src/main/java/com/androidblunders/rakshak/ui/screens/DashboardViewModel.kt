@@ -1,4 +1,4 @@
-package com.androidblunders.rakshak.presentation
+package com.androidblunders.rakshak.ui.screens
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope

@@ -1,4 +1,4 @@
-package com.androidblunders.rakshak.presentation
+package com.androidblunders.rakshak.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -50,17 +50,14 @@ fun MessageMonitorSection(modifier: Modifier = Modifier) {
     var isPermissionGranted by remember { mutableStateOf(MessageExtractor.isPermissionGranted(context)) }
     val messages = remember { mutableStateListOf<MessageData>() }
 
-    // Backfill history the moment access is granted.
-    LaunchedEffect(isPermissionGranted) {
-        if (isPermissionGranted) {
-            val history = MessageExtractor.getLast25Messages()
+    // Backfill any already-captured history (SMS + notifications) on first show.
+    LaunchedEffect(Unit) {
+        val history = MessageExtractor.getLast25Messages()
+        if (history.isNotEmpty()) {
             messages.clear()
             messages.addAll(history)
         }
-    }
-
-    // Live capture — dedup and prepend.
-    LaunchedEffect(Unit) {
+        // Live capture — dedup and prepend.
         MessageExtractor.messageFlow.collectLatest { message ->
             if (!messages.contains(message)) {
                 messages.add(0, message)
@@ -82,18 +79,25 @@ fun MessageMonitorSection(modifier: Modifier = Modifier) {
 
     Card(shape = RoundedCornerShape(16.dp), modifier = modifier.fillMaxWidth()) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Captured messages", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            Text("Captured messages · ${messages.size}", fontWeight = FontWeight.Bold, fontSize = 18.sp)
 
+            // SMS is read directly via the SMS receiver (RECEIVE_SMS). Notification
+            // access is only needed to ALSO monitor WhatsApp / chat apps.
             if (!isPermissionGranted) {
-                Text("Notification access is required to monitor SMS & chat apps.")
+                Text(
+                    "SMS is monitored directly. Enable notification access to also scan " +
+                        "WhatsApp & other chat apps.",
+                    fontSize = 13.sp,
+                )
                 Button(
                     onClick = { MessageExtractor.openPermissionSettings(context) },
                     modifier = Modifier.fillMaxWidth().height(56.dp),
-                ) { Text("Grant notification access") }
-            } else if (messages.isEmpty()) {
-                Text("Monitoring… captured messages will appear here.")
+                ) { Text("Enable chat-app monitoring") }
+            }
+
+            if (messages.isEmpty()) {
+                Text("Waiting for messages… send an SMS, or use the demo button above.")
             } else {
-                Text("Monitoring active · ${messages.size} captured")
                 LazyColumn(
                     modifier = Modifier.fillMaxWidth().heightIn(max = 260.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp),

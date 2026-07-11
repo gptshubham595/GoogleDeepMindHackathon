@@ -1,4 +1,4 @@
-package com.androidblunders.rakshak.presentation
+package com.androidblunders.rakshak.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
@@ -35,6 +35,8 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.androidblunders.rakshak.core.model.ThreatLevel
 import com.androidblunders.rakshak.audio.CallTranscriber
+import com.androidblunders.rakshak.presentation.*
+
 import androidx.compose.runtime.LaunchedEffect
 import kotlinx.coroutines.delay
 
@@ -55,6 +57,7 @@ fun DashboardScreen(
     viewModel: DashboardViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsState()
+    val context = LocalContext.current
     var draft by remember { mutableStateOf("This is the police. A warrant is issued. Pay a fine now or be arrested.") }
 
     Column(
@@ -65,22 +68,18 @@ fun DashboardScreen(
             .padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        val context = LocalContext.current
         Text("Rakshak", fontSize = 30.sp, fontWeight = FontWeight.Bold, color = GuardianBlue)
 
         ThreatBanner(state)
 
-<<<<<<< HEAD
-        state.spamResult?.let { 
-            SpamResultCard(result = it, onReportClicked = { res -> 
-                viewModel.reportToCyberPolice(context, res) 
-            }) 
-        }
-=======
         AudioStreamMonitorSection()
         
-        state.spamResult?.let { SpamResultCard(it) }
->>>>>>> 6fc7644e50134b1fb57acc8b7aad2bbd14d502a3
+        state.spamResult?.let { result ->
+            SpamResultCard(
+                result = result,
+                onReportClicked = { viewModel.reportToCyberPolice(context, result) },
+            )
+        }
 
         Card(
             colors = CardDefaults.cardColors(),
@@ -236,7 +235,7 @@ private fun ThreatBanner(state: DashboardUiState) {
 @Composable
 private fun SpamResultCard(
     result: com.androidblunders.rakshak.spam_detection.SpamDetectionResult,
-    onReportClicked: (com.androidblunders.rakshak.spam_detection.SpamDetectionResult) -> Unit
+    onReportClicked: () -> Unit,
 ) {
     val score = result.score.score
     val accent = when {
@@ -258,11 +257,10 @@ private fun SpamResultCard(
                 "${result.status}  ·  ${result.score.label}  ·  ${(score * 100).toInt()}%",
                 color = accent, fontWeight = FontWeight.Bold, fontSize = 16.sp,
             )
-            
             if (result.hasTransaction) {
                 Spacer(Modifier.height(8.dp))
                 Button(
-                    onClick = { onReportClicked(result) },
+                    onClick = onReportClicked,
                     modifier = Modifier.fillMaxWidth().height(50.dp),
                 ) { Text("Report to Cyber Police") }
             }

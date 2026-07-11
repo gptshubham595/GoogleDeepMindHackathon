@@ -11,7 +11,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.ui.Modifier
 import com.androidblunders.rakshak.call.CallStateMonitor
-import com.androidblunders.rakshak.presentation.DashboardScreen
+import com.androidblunders.rakshak.ui.screens.DashboardScreen
 import com.androidblunders.rakshak.ui.theme.Typography
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
@@ -27,7 +27,8 @@ class MainActivity : ComponentActivity() {
 
         enableEdgeToEdge()
         setContent {
-            MaterialTheme(typography = Typography) { Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding -> DashboardScreen(modifier = Modifier.padding(innerPadding)) } }
+            MaterialTheme(typography = Typography) { Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
+                DashboardScreen(modifier = Modifier.padding(innerPadding)) } }
         }
     }
 
