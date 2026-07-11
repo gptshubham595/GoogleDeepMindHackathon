@@ -105,7 +105,13 @@ async def ws_call_endpoint(websocket: WebSocket, call_id: str):
                                 text_data = json.loads(message["text"])
                                 if text_data.get("command") == "stop":
                                     logger.info(f"Stop command received from client for call: {call_id}")
+                                    await session.send_realtime_input(audio_stream_end=True)
+                                    # Keep the receiver alive briefly so Gemini can flush the
+                                    # final input transcription before tasks are cancelled.
+                                    await asyncio.sleep(3)
                                     break
+                                if text_data.get("command") == "audio_stream_end":
+                                    await session.send_realtime_input(audio_stream_end=True)
                             except json.JSONDecodeError:
                                 # Text transcript mode is useful for tests and non-audio clients.
                                 await analyze_and_send(message["text"])

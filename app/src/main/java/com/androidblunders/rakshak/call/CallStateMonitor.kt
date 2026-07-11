@@ -61,14 +61,18 @@ class CallStateMonitor @Inject constructor(
         when (state) {
             TelephonyManager.CALL_STATE_OFFHOOK -> {
                 Log.i(TAG, "Call connected → starting protection")
+                CallActivationOverlay.update(context, CallActivationOverlay.Phase.ACTIVE)
                 runCatching { CallTranscriber.startTranscription(context) }
                     .onFailure { Log.e(TAG, "Could not start streaming service", it) }
             }
             TelephonyManager.CALL_STATE_IDLE -> {
                 Log.i(TAG, "Call ended → stopping protection")
+                CallActivationOverlay.update(context, CallActivationOverlay.Phase.IDLE)
                 runCatching { CallTranscriber.stopTranscription(context) }
             }
-            else -> Unit // RINGING — wait for connect.
+            TelephonyManager.CALL_STATE_RINGING ->
+                CallActivationOverlay.update(context, CallActivationOverlay.Phase.RINGING)
+            else -> Unit
         }
     }
 

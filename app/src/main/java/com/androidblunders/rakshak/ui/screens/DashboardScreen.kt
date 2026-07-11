@@ -29,6 +29,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -44,9 +45,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.androidblunders.rakshak.audio.CallTranscriber
 import com.androidblunders.rakshak.call.CallStreamStatus
 import com.androidblunders.rakshak.core.model.ThreatLevel
+import com.androidblunders.rakshak.core.status.ProtectionRuntimeStatus
+import java.text.DateFormat
+import java.util.Date
 
 // "Vigilant Guardian" palette, kept local so this demo screen stays decoupled
 // from the app's evolving ui.theme module.
@@ -67,8 +73,19 @@ fun DashboardScreen(
     onOpenSettings: () -> Unit = {},
 ) {
     val state by viewModel.uiState.collectAsState()
+    val transactionResult by viewModel.latestTransactionResult.collectAsState()
+    val callActive by CallStreamStatus.active.collectAsState()
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val lifecycleState by lifecycleOwner.lifecycle.currentStateFlow.collectAsState()
     val context = LocalContext.current
     var draft by remember { mutableStateOf("This is the police. A warrant is issued. Pay a fine now or be arrested.") }
+
+    LaunchedEffect(transactionResult?.timestamp, callActive, lifecycleState) {
+        val transaction = transactionResult ?: return@LaunchedEffect
+        if (!callActive && lifecycleState.isAtLeast(Lifecycle.State.RESUMED)) {
+            viewModel.autoDraftTransactionIfNeeded(context, transaction)
+        }
+    }
 
     Column(
         modifier = modifier
@@ -83,6 +100,8 @@ fun DashboardScreen(
         ThreatBanner(state)
 
         ProtectionReadinessSection()
+
+        RuntimePipelineStatusSection()
 
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -100,12 +119,18 @@ fun DashboardScreen(
 
         CallProtectionSection()
         
-        state.spamResult?.let { result ->
+        transactionResult?.let { result ->
             SpamResultCard(
                 result = result,
                 onReportClicked = { viewModel.reportToCyberPolice(context, result) },
             )
         }
+
+        state.spamResult
+            ?.takeIf { it.timestamp != transactionResult?.timestamp }
+            ?.let { result ->
+                SpamResultCard(result = result, onReportClicked = {})
+            }
 
         Card(
             colors = CardDefaults.cardColors(),
@@ -183,6 +208,59 @@ fun DashboardScreen(
 }
 
 @Composable
+private fun RuntimePipelineStatusSection() {
+    val context = LocalContext.current
+    val sttState by ProtectionRuntimeStatus.sttState.collectAsState()
+    val ttsState by ProtectionRuntimeStatus.ttsState.collectAsState()
+    val lastInput by ProtectionRuntimeStatus.lastInput.collectAsState()
+    val lastInputAt by ProtectionRuntimeStatus.lastInputAt.collectAsState()
+    val messageCount by ProtectionRuntimeStatus.messageCount.collectAsState()
+    val lastWarning by ProtectionRuntimeStatus.lastSpokenWarning.collectAsState()
+    val smsGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECEIVE_SMS) ==
+        PackageManager.PERMISSION_GRANTED
+
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Live protection pipeline", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            RuntimeStatusRow("STT", sttState.name, sttState != ProtectionRuntimeStatus.SttState.ERROR)
+            RuntimeStatusRow("TTS", ttsState.name, ttsState != ProtectionRuntimeStatus.TtsState.ERROR)
+            RuntimeStatusRow(
+                "Message reader",
+                if (smsGranted) "MONITORING · $messageCount received" else "PERMISSION REQUIRED",
+                smsGranted,
+            )
+            Text(lastInput, fontWeight = FontWeight.SemiBold)
+            if (lastInputAt > 0L) {
+                Text(
+                    "Last automatic activation: " +
+                        DateFormat.getTimeInstance(DateFormat.MEDIUM).format(Date(lastInputAt)),
+                    fontSize = 14.sp,
+                )
+            }
+            if (lastWarning.isNotBlank()) {
+                Text("Last spoken warning: “${lastWarning.take(100)}”", fontSize = 14.sp)
+            }
+        }
+    }
+}
+
+@Composable
+private fun RuntimeStatusRow(label: String, status: String, healthy: Boolean) {
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(label)
+        Text(
+            status,
+            color = if (healthy) SafetyGreen else AlertRed,
+            fontWeight = FontWeight.Bold,
+        )
+    }
+}
+
+@Composable
 private fun ProtectionReadinessSection() {
     val context = LocalContext.current
     var overlayGranted by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
@@ -201,11 +279,16 @@ private fun ProtectionReadinessSection() {
         PackageManager.PERMISSION_GRANTED
     val phoneGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) ==
         PackageManager.PERMISSION_GRANTED
+    val locationGranted = ContextCompat.checkSelfPermission(
+        context,
+        Manifest.permission.ACCESS_COARSE_LOCATION,
+    ) == PackageManager.PERMISSION_GRANTED
     val checks = listOf(
         "Call activation" to phoneGranted,
         "Audio capture" to micGranted,
         "Real SMS reading" to smsGranted,
         "Threat overlay" to overlayGranted,
+        "Report location" to locationGranted,
     )
     val completed = checks.count { it.second }
 
@@ -222,7 +305,7 @@ private fun ProtectionReadinessSection() {
                     color = if (ready) SafetyGreen else AlertRed,
                 )
             }
-            if (!micGranted || !smsGranted || !phoneGranted) {
+            if (!micGranted || !smsGranted || !phoneGranted || !locationGranted) {
                 OutlinedButton(
                     onClick = {
                         settingsLauncher.launch(
@@ -263,6 +346,9 @@ private fun CallProtectionSection() {
     val serverState by CallStreamStatus.serverState.collectAsState()
     val serverThreat by CallStreamStatus.serverThreat.collectAsState()
     val lastError by CallStreamStatus.lastError.collectAsState()
+    val sttState by ProtectionRuntimeStatus.sttState.collectAsState()
+    val ttsState by ProtectionRuntimeStatus.ttsState.collectAsState()
+    val lastWarning by ProtectionRuntimeStatus.lastSpokenWarning.collectAsState()
     val statusColor = when (connection) {
         CallStreamStatus.Connection.CONNECTED -> SafetyGreen
         CallStreamStatus.Connection.ERROR -> AlertRed
@@ -282,9 +368,44 @@ private fun CallProtectionSection() {
                 color = statusColor,
                 fontWeight = FontWeight.Bold,
             )
-            Text("Sent ${formatBytes(bytesSent)} PCM · Received ${formatBytes(bytesReceived)} JSON/audio")
+            Text(
+                (if (active) "Live session" else "Last session") +
+                    ": sent ${formatBytes(bytesSent)} PCM · received " +
+                    "${formatBytes(bytesReceived)} JSON/audio",
+            )
+            RuntimeStatusRow(
+                "Audio capture",
+                when {
+                    active && bytesSent > 0L -> "CAPTURING"
+                    active -> "STARTING"
+                    bytesSent > 0L -> "CAPTURED ${formatBytes(bytesSent)}"
+                    else -> "IDLE"
+                },
+                !active || bytesSent > 0L,
+            )
+            RuntimeStatusRow(
+                "STT",
+                "$sttState · ${transcript.length} transcript chars",
+                sttState != ProtectionRuntimeStatus.SttState.ERROR,
+            )
+            RuntimeStatusRow(
+                "TTS warning",
+                ttsState.name,
+                ttsState != ProtectionRuntimeStatus.TtsState.ERROR,
+            )
             Text("VOICE state: $serverState · Risk ${(serverThreat * 100).toInt()}%")
             lastError?.let { Text(it, color = AlertRed) }
+            if (bytesSent > 0L && transcript.isBlank()) {
+                Text(
+                    "Audio reached VOICE, but no transcript was returned. Speak near the " +
+                        "microphone and check the VOICE terminal for Gemini transcription errors.",
+                    color = Color(0xFFD96C00),
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            if (lastWarning.isNotBlank()) {
+                Text("Last warning played: ${lastWarning.take(100)}", fontSize = 14.sp)
+            }
             Text(
                 "Audio is captured as 16 kHz mono PCM. On standard Android phones, " +
                     "speakerphone may be needed to hear both sides of a cellular call.",
@@ -363,7 +484,11 @@ private fun SpamResultCard(
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("Latest scam analysis", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            Text(
+                if (result.hasTransaction) "Dangerous transaction alert" else "Latest scam analysis",
+                fontWeight = FontWeight.Bold,
+                fontSize = 18.sp,
+            )
             Text("From ${result.sender}", color = GuardianBlue, fontWeight = FontWeight.SemiBold)
             Text("\"${result.messageBody.take(120)}\"", fontSize = 14.sp)
             Text(

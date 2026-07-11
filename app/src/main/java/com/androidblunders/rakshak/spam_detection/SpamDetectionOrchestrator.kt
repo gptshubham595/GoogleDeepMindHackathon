@@ -57,6 +57,10 @@ class SpamDetectionOrchestrator @Inject constructor(
     private val _recentResults = MutableStateFlow<List<SpamDetectionResult>>(emptyList())
     val recentResults: StateFlow<List<SpamDetectionResult>> = _recentResults.asStateFlow()
 
+    private val _latestTransactionResult = MutableStateFlow<SpamDetectionResult?>(null)
+    val latestTransactionResult: StateFlow<SpamDetectionResult?> =
+        _latestTransactionResult.asStateFlow()
+
     /** Starts both collectors exactly once for the lifetime of this singleton. */
     fun startObserving() {
         if (!observing.compareAndSet(false, true)) return
@@ -122,11 +126,23 @@ class SpamDetectionOrchestrator @Inject constructor(
     }
 
     private fun publishResult(sender: String, body: String, score: ThreatScore) {
-        val status = statusFor(score.score)
+        val isSuspiciousDebit = TransactionDetailsExtractor.isSuspiciousDebitSms(body)
+        val deterministicFloor = TransactionDetailsExtractor.deterministicThreatFloor(body)
+        val effectiveScore = if (isSuspiciousDebit && score.score < deterministicFloor) {
+            score.copy(
+                score = deterministicFloor,
+                label = "PHISHING",
+                confidence = maxOf(score.confidence, 0.95f),
+                signals = (score.signals + "DEBIT_REVERSAL_LINK").distinct(),
+            )
+        } else {
+            score
+        }
+        val status = statusFor(effectiveScore.score)
         val result = SpamDetectionResult(
             sender = sender,
             messageBody = body,
-            score = score,
+            score = effectiveScore,
             status = status,
             timestamp = System.currentTimeMillis(),
             hasTransaction = TransactionDetailsExtractor.isTransactionSms(body),
@@ -134,12 +150,14 @@ class SpamDetectionOrchestrator @Inject constructor(
 
         _latestResult.value = result
         _recentResults.value = (listOf(result) + _recentResults.value).take(MAX_BUFFER)
-        coreThreatState.override(mapToThreatLevel(score.score))
+        if (result.hasTransaction) _latestTransactionResult.value = result
+        coreThreatState.override(mapToThreatLevel(effectiveScore.score))
 
         Log.i(
             TAG,
-            "Spam result: sender=$sender score=${(score.score * 100).toInt()}% " +
-                "label=${score.label} stage=${score.stage} status=$status signals=${score.signals}",
+            "Spam result: sender=$sender score=${(effectiveScore.score * 100).toInt()}% " +
+                "label=${effectiveScore.label} stage=${effectiveScore.stage} " +
+                "status=$status signals=${effectiveScore.signals}",
         )
     }
 

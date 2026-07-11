@@ -10,6 +10,7 @@ import android.util.Base64
 import android.util.Log
 import com.androidblunders.rakshak.call.CallStreamStatus
 import com.androidblunders.rakshak.call.LiveTranscriptBus
+import com.androidblunders.rakshak.core.status.ProtectionRuntimeStatus
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
@@ -72,6 +73,7 @@ class AudioStreamingManager(private val serverUrl: String) {
         if (!started.compareAndSet(false, true)) return
         CallStreamStatus.setError(null)
         CallStreamStatus.setConnection(CallStreamStatus.Connection.CONNECTING)
+        ProtectionRuntimeStatus.setStt(ProtectionRuntimeStatus.SttState.CONNECTING)
         val request = Request.Builder().url(serverUrl).build()
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
@@ -82,9 +84,13 @@ class AudioStreamingManager(private val serverUrl: String) {
                 Log.d(TAG, "WebSocket open → $serverUrl")
                 CallStreamStatus.setConnection(CallStreamStatus.Connection.CONNECTED)
                 runCatching { startRecording() }
+                    .onSuccess {
+                        ProtectionRuntimeStatus.setStt(ProtectionRuntimeStatus.SttState.LISTENING)
+                    }
                     .onFailure { error ->
                         Log.e(TAG, "Audio capture failed", error)
                         CallStreamStatus.setError(error.message ?: "Audio capture failed")
+                        ProtectionRuntimeStatus.setStt(ProtectionRuntimeStatus.SttState.ERROR)
                         cleanup(CallStreamStatus.Connection.ERROR)
                     }
             }
@@ -102,6 +108,7 @@ class AudioStreamingManager(private val serverUrl: String) {
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 Log.e(TAG, "WebSocket failure: ${t.message}")
                 CallStreamStatus.setError(t.message ?: "WebSocket connection failed")
+                ProtectionRuntimeStatus.setStt(ProtectionRuntimeStatus.SttState.ERROR)
                 cleanup(CallStreamStatus.Connection.ERROR)
             }
 
@@ -125,6 +132,7 @@ class AudioStreamingManager(private val serverUrl: String) {
         json.optString("transcript_chunk").takeIf { it.isNotBlank() }?.let { chunk ->
             appendTranscript(chunk)
             CallStreamStatus.setTranscript(getFullTranscription())
+            ProtectionRuntimeStatus.markTranscript(chunk)
             LiveTranscriptBus.push(chunk) // on-device spam-detection analyzes this
         }
         if (json.has("threat_score")) {
@@ -152,9 +160,12 @@ class AudioStreamingManager(private val serverUrl: String) {
     private fun playWarningAudio(base64: String) {
         scope.launch {
             var track: AudioTrack? = null
+            var playbackFailed = false
             try {
                 val pcm = Base64.decode(base64, Base64.DEFAULT)
                 if (pcm.isEmpty()) return@launch
+                ProtectionRuntimeStatus.setTts(ProtectionRuntimeStatus.TtsState.SPEAKING)
+                ProtectionRuntimeStatus.markSpokenWarning("VOICE server warning audio")
                 track = AudioTrack.Builder()
                     .setAudioAttributes(
                         AudioAttributes.Builder()
@@ -177,12 +188,17 @@ class AudioStreamingManager(private val serverUrl: String) {
                 val durationMs = ((pcm.size / 2.0) / TTS_SAMPLE_RATE * 1_000).toLong()
                 delay(durationMs.coerceAtLeast(250L))
             } catch (e: Exception) {
+                playbackFailed = true
                 Log.e(TAG, "Failed to play warning audio", e)
             } finally {
                 track?.let { audioTrack ->
                     runCatching { audioTrack.stop() }
                     audioTrack.release()
                 }
+                ProtectionRuntimeStatus.setTts(
+                    if (playbackFailed) ProtectionRuntimeStatus.TtsState.ERROR
+                    else ProtectionRuntimeStatus.TtsState.READY,
+                )
             }
         }
     }
@@ -214,11 +230,23 @@ class AudioStreamingManager(private val serverUrl: String) {
 
         recordingJob = scope.launch {
             val buffer = ByteArray(captureBufferSize)
+            var silentBytes = 0
+            var endSentForCurrentSilence = false
             while (isRecording) {
                 val read = record.read(buffer, 0, buffer.size)
                 if (read > 0) {
                     val sent = webSocket?.send(buffer.copyOf(read).toByteString()) ?: false
                     if (sent) CallStreamStatus.addSent(read)
+                    if (isSilentPcm16(buffer, read)) {
+                        silentBytes += read
+                        if (silentBytes >= ONE_SECOND_PCM_BYTES && !endSentForCurrentSilence) {
+                            webSocket?.send("{\"command\":\"audio_stream_end\"}")
+                            endSentForCurrentSilence = true
+                        }
+                    } else {
+                        silentBytes = 0
+                        endSentForCurrentSilence = false
+                    }
                 } else if (read < 0) {
                     CallStreamStatus.setError("AudioRecord read failed ($read)")
                     break
@@ -228,6 +256,7 @@ class AudioStreamingManager(private val serverUrl: String) {
     }
 
     fun stopStreaming() {
+        runCatching { webSocket?.send("{\"command\":\"audio_stream_end\"}") }
         runCatching { webSocket?.send("{\"command\":\"stop\"}") }
         cleanup(CallStreamStatus.Connection.DISCONNECTED)
     }
@@ -256,6 +285,9 @@ class AudioStreamingManager(private val serverUrl: String) {
         if (closeSocket) webSocket?.close(1000, "Stopped")
         webSocket = null
         CallStreamStatus.setConnection(connection)
+        if (connection != CallStreamStatus.Connection.ERROR) {
+            ProtectionRuntimeStatus.setStt(ProtectionRuntimeStatus.SttState.IDLE)
+        }
     }
 
     fun getFullTranscription(): String = synchronized(transcriptionBuilder) {
@@ -269,9 +301,24 @@ class AudioStreamingManager(private val serverUrl: String) {
         }
     }
 
+    private fun isSilentPcm16(buffer: ByteArray, length: Int): Boolean {
+        var peak = 0
+        var index = 0
+        while (index + 1 < length) {
+            val sample = ((buffer[index + 1].toInt() shl 8) or
+                (buffer[index].toInt() and 0xFF)).toShort().toInt()
+            peak = maxOf(peak, kotlin.math.abs(sample))
+            if (peak >= SILENCE_PEAK_THRESHOLD) return false
+            index += 2
+        }
+        return true
+    }
+
     private companion object {
         const val TAG = "AudioStreaming"
         // Gemini TTS returns 24 kHz mono PCM16.
         const val TTS_SAMPLE_RATE = 24000
+        const val ONE_SECOND_PCM_BYTES = 16_000 * 2
+        const val SILENCE_PEAK_THRESHOLD = 500
     }
 }

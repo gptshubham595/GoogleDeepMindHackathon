@@ -48,8 +48,11 @@ class DashboardViewModel @Inject constructor(
     private val textGenerator: TextGenerator,
     private val modelManager: GemmaModelManager,
 ) : ViewModel() {
+    private var lastAutoDraftedTransactionAt = -1L
 
     val recentResults: StateFlow<List<SpamDetectionResult>> = spamDetection.recentResults
+    val latestTransactionResult: StateFlow<SpamDetectionResult?> =
+        spamDetection.latestTransactionResult
 
     val uiState: StateFlow<DashboardUiState> = combine(
         orchestrator.threatState,
@@ -128,12 +131,26 @@ class DashboardViewModel @Inject constructor(
 
     /** Draft an email to the Cyber Police if a transaction scam is detected. */
     fun reportToCyberPolice(context: android.content.Context, result: SpamDetectionResult) {
-        val details = com.androidblunders.rakshak.reporting.TransactionDetailsExtractor.extractDetails(result.messageBody)
-        com.androidblunders.rakshak.reporting.CyberPoliceReporter.draftEmail(
-            context,
-            result.sender,
-            result.messageBody,
-            details
-        )
+        viewModelScope.launch {
+            val details = com.androidblunders.rakshak.reporting.TransactionDetailsExtractor.extractDetails(
+                result.messageBody,
+                result.timestamp,
+            )
+            com.androidblunders.rakshak.reporting.CyberPoliceReporter.draftEmail(
+                context,
+                result.sender,
+                result.messageBody,
+                details,
+            )
+        }
+    }
+
+    fun autoDraftTransactionIfNeeded(
+        context: android.content.Context,
+        result: SpamDetectionResult,
+    ) {
+        if (result.timestamp == lastAutoDraftedTransactionAt) return
+        lastAutoDraftedTransactionAt = result.timestamp
+        reportToCyberPolice(context, result)
     }
 }

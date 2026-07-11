@@ -3,6 +3,7 @@ package com.androidblunders.rakshak.messaging
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.channels.BufferOverflow
+import com.androidblunders.rakshak.core.status.ProtectionRuntimeStatus
 
 data class MessageData(
     val sender: String,
@@ -34,6 +35,7 @@ object MessageExtractor {
                 messageHistory.removeAt(messageHistory.lastIndex)
             }
         }
+        ProtectionRuntimeStatus.markMessage(data.sender, sourceLabel(data.packageName))
         _messageFlow.tryEmit(data)
     }
 
@@ -81,4 +83,10 @@ object MessageExtractor {
 
     private const val MAX_HISTORY = 25
     private const val DUPLICATE_WINDOW_MS = 2_000L
+
+    private fun sourceLabel(packageName: String): String = when {
+        packageName.contains("Telephony", ignoreCase = true) -> "SMS"
+        packageName == "com.rakshak.demo" -> "Demo"
+        else -> "Notification"
+    }
 }

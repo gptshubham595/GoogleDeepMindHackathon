@@ -10,6 +10,7 @@ import com.androidblunders.rakshak.R
 import com.androidblunders.rakshak.BuildConfig
 import com.androidblunders.rakshak.audio.AudioStreamingManager
 import com.androidblunders.rakshak.call.CallStreamStatus
+import com.androidblunders.rakshak.core.status.ProtectionRuntimeStatus
 
 class CallAudioStreamingService : Service() {
 
@@ -38,6 +39,7 @@ class CallAudioStreamingService : Service() {
         )
 
         CallStreamStatus.setActive(true)
+        ProtectionRuntimeStatus.markCallActivated()
         streamingManager?.startStreaming()
         return START_NOT_STICKY
     }

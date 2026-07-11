@@ -26,14 +26,18 @@ class PhoneCallReceiver : BroadcastReceiver() {
         when (intent.getStringExtra(TelephonyManager.EXTRA_STATE)) {
             TelephonyManager.EXTRA_STATE_OFFHOOK -> {
                 Log.i(TAG, "Call connected → starting protection")
+                CallActivationOverlay.update(context, CallActivationOverlay.Phase.ACTIVE)
                 runCatching { CallTranscriber.startTranscription(context) }
                     .onFailure { Log.e(TAG, "Could not start streaming service", it) }
             }
             TelephonyManager.EXTRA_STATE_IDLE -> {
                 Log.i(TAG, "Call ended → stopping protection")
+                CallActivationOverlay.update(context, CallActivationOverlay.Phase.IDLE)
                 runCatching { CallTranscriber.stopTranscription(context) }
             }
-            else -> Unit // RINGING or unknown — wait for OFFHOOK.
+            TelephonyManager.EXTRA_STATE_RINGING ->
+                CallActivationOverlay.update(context, CallActivationOverlay.Phase.RINGING)
+            else -> Unit
         }
     }
 

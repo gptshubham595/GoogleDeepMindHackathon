@@ -5,6 +5,8 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.PixelFormat
 import android.os.IBinder
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
 import android.view.WindowManager
 import androidx.compose.ui.platform.ComposeView
@@ -21,6 +23,7 @@ import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.androidblunders.rakshak.core.model.ThreatLevel
 import com.androidblunders.rakshak.presentation.ActiveThreatInterceptor
+import com.androidblunders.rakshak.presentation.CallActivationNotice
 import com.androidblunders.rakshak.presentation.GentleGuidanceMode
 import com.androidblunders.rakshak.ui.theme.RakshakTheme
 import kotlinx.coroutines.CoroutineScope
@@ -37,6 +40,8 @@ class OverlayService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedStat
     private val lifecycleRegistry = LifecycleRegistry(this)
     private val store = ViewModelStore()
     private val savedStateRegistryController = SavedStateRegistryController.create(this)
+    private val handler = Handler(Looper.getMainLooper())
+    private var overlayMode = OverlayMode.NONE
 
     override val savedStateRegistry: SavedStateRegistry
         get() = savedStateRegistryController.savedStateRegistry
@@ -58,6 +63,30 @@ class OverlayService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedStat
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        intent?.getStringExtra(EXTRA_CALL_PHASE)?.let { rawPhase ->
+            val phase = runCatching {
+                com.androidblunders.rakshak.call.CallActivationOverlay.Phase.valueOf(rawPhase)
+            }.getOrNull() ?: return START_NOT_STICKY
+            when (phase) {
+                com.androidblunders.rakshak.call.CallActivationOverlay.Phase.RINGING ->
+                    showCallActivation(callConnected = false)
+                com.androidblunders.rakshak.call.CallActivationOverlay.Phase.ACTIVE -> {
+                    showCallActivation(callConnected = true)
+                    handler.postDelayed({
+                        if (overlayMode == OverlayMode.CALL_ACTIVATION) {
+                            removeOverlay()
+                            stopSelf()
+                        }
+                    }, CALL_ACTIVE_NOTICE_MS)
+                }
+                com.androidblunders.rakshak.call.CallActivationOverlay.Phase.IDLE -> {
+                    if (overlayMode == OverlayMode.CALL_ACTIVATION) removeOverlay()
+                    if (overlayMode != OverlayMode.THREAT) stopSelf()
+                }
+            }
+            return START_NOT_STICKY
+        }
+
         val threatLevelName = intent?.getStringExtra(EXTRA_THREAT_LEVEL) ?: return START_NOT_STICKY
         val threatLevel = try {
             ThreatLevel.valueOf(threatLevelName)
@@ -76,14 +105,11 @@ class OverlayService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedStat
     }
     
     private fun showOverlay(threatLevel: ThreatLevel) {
-        if (composeView == null) {
-            composeView = ComposeView(this).apply {
-                setViewTreeLifecycleOwner(this@OverlayService)
-                setViewTreeViewModelStoreOwner(this@OverlayService)
-                setViewTreeSavedStateRegistryOwner(this@OverlayService)
-            }
+        removeOverlay()
+        overlayMode = OverlayMode.THREAT
+        composeView = newComposeView()
 
-            val params = WindowManager.LayoutParams(
+        val params = WindowManager.LayoutParams(
                 WindowManager.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
@@ -95,8 +121,7 @@ class OverlayService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedStat
                 gravity = Gravity.CENTER
             }
 
-            windowManager.addView(composeView, params)
-        }
+        windowManager.addView(composeView, params)
 
         // Update the Compose content based on the threat level
         composeView?.setContent {
@@ -124,6 +149,32 @@ class OverlayService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedStat
         }
     }
 
+    private fun showCallActivation(callConnected: Boolean) {
+        if (overlayMode == OverlayMode.THREAT) return
+        removeOverlay()
+        overlayMode = OverlayMode.CALL_ACTIVATION
+        composeView = newComposeView()
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT,
+        ).apply { gravity = Gravity.TOP }
+        windowManager.addView(composeView, params)
+        composeView?.setContent {
+            RakshakTheme { CallActivationNotice(callConnected = callConnected) }
+        }
+    }
+
+    private fun newComposeView(): ComposeView = ComposeView(this).apply {
+        setViewTreeLifecycleOwner(this@OverlayService)
+        setViewTreeViewModelStoreOwner(this@OverlayService)
+        setViewTreeSavedStateRegistryOwner(this@OverlayService)
+    }
+
     private fun removeOverlay() {
         composeView?.let {
             if (it.isAttachedToWindow) {
@@ -131,6 +182,7 @@ class OverlayService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedStat
             }
             composeView = null
         }
+        overlayMode = OverlayMode.NONE
     }
 
     override fun onDestroy() {
@@ -147,5 +199,9 @@ class OverlayService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedStat
 
     companion object {
         const val EXTRA_THREAT_LEVEL = "extra_threat_level"
+        const val EXTRA_CALL_PHASE = "extra_call_phase"
+        private const val CALL_ACTIVE_NOTICE_MS = 3_000L
     }
+
+    private enum class OverlayMode { NONE, CALL_ACTIVATION, THREAT }
 }
