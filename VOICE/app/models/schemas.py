@@ -19,6 +19,8 @@ class TTSRequest(BaseModel):
 class TTSResponse(BaseModel):
     audio_base64: str = Field(..., description="Base64 encoded audio bytes (PCM/WAV) containing warning")
     text: str = Field(..., description="Text that was synthesized")
+    language: str = Field("hi-IN", description="Language code used for synthesis")
+    voice_style: str = Field("urgent", description="Voice style used: urgent, clear, calm, emphatic")
 
 class OfflineClassifyRequest(BaseModel):
     transcript_chunk: str = Field(..., description="Cumulative or single transcript snippet from on-device local ASR")
