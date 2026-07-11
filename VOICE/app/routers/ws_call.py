@@ -116,13 +116,14 @@ async def ws_call_endpoint(websocket: WebSocket, call_id: str):
                                 text_data = json.loads(message["text"])
                                 if text_data.get("command") == "stop":
                                     logger.info(f"Stop command received from client for call: {call_id}")
-                                    await session.send_realtime_input(audio_stream_end=True)
+                                    await client_to_gemini_queue.put(AUDIO_STREAM_END)
+                                    await client_to_gemini_queue.join()
                                     # Keep the receiver alive briefly so Gemini can flush the
                                     # final input transcription before tasks are cancelled.
                                     await asyncio.sleep(3)
                                     break
                                 if text_data.get("command") == "audio_stream_end":
-                                    await session.send_realtime_input(audio_stream_end=True)
+                                    await client_to_gemini_queue.put(AUDIO_STREAM_END)
                             except json.JSONDecodeError:
                                 # Text transcript mode is useful for tests and non-audio clients.
                                 await analyze_and_send(message["text"])
@@ -138,15 +139,21 @@ async def ws_call_endpoint(websocket: WebSocket, call_id: str):
                 try:
                     while True:
                         data = await client_to_gemini_queue.get()
-                        if data is None:
-                            break
-                        # Send PCM audio chunk to Gemini Live
-                        await session.send_realtime_input(
-                            audio=types.Blob(
-                                data=data,
-                                mime_type="audio/pcm;rate=16000"
-                            )
-                        )
+                        try:
+                            if data is None:
+                                break
+                            if data == AUDIO_STREAM_END:
+                                await session.send_realtime_input(audio_stream_end=True)
+                            else:
+                                # Send PCM audio chunk to Gemini Live in strict queue order.
+                                await session.send_realtime_input(
+                                    audio=types.Blob(
+                                        data=data,
+                                        mime_type="audio/pcm;rate=16000"
+                                    )
+                                )
+                        finally:
+                            client_to_gemini_queue.task_done()
                 except Exception as e:
                     logger.error(f"Error sending to Gemini Live: {e}")
 
@@ -202,3 +209,6 @@ async def ws_call_endpoint(websocket: WebSocket, call_id: str):
         except Exception:
             pass
         logger.info(f"WebSocket session finished for call_id: {call_id}")
+
+
+AUDIO_STREAM_END = "__audio_stream_end__"
