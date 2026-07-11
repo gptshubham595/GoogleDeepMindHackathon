@@ -167,7 +167,7 @@ class STTService:
     
     async def transcribe_audio_base64(self, audio_base64: str, language: str = "hi-IN", mime_type: str = "audio/pcm;rate=16000") -> str:
         """
-        Transcribes a base64 encoded audio file using Gemini Live API.
+        Transcribes a base64 encoded audio file using Gemini API.
         Supports WAV, MP3, OGG, FLAC, M4A, and raw PCM audio.
         """
         if not self.client:
@@ -178,70 +178,51 @@ class STTService:
             audio_bytes = base64.b64decode(audio_base64)
             logger.info(f"Audio size: {len(audio_bytes)} bytes, MIME type: {mime_type}")
             
-            # For WAV files, extract PCM and update MIME type
-            if mime_type == "audio/wav" or audio_bytes.startswith(b'RIFF'):
-                logger.info("Processing WAV file")
+            # For WAV files, keep as WAV for Gemini API
+            if audio_bytes.startswith(b'RIFF'):
+                logger.info("Detected WAV file")
+                mime_type = "audio/wav"
+            
+            # Create prompt for transcription
+            prompt = f"""Transcribe the audio content exactly as spoken. 
+Provide ONLY the transcription text, nothing else.
+If the audio is in {language}, transcribe in that language.
+Do not add any explanations, timestamps, or additional text."""
+            
+            # Use Gemini API with audio for transcription
+            logger.info(f"Sending audio to Gemini API for transcription")
+            
+            # Run in executor since Gemini SDK might be blocking
+            loop = asyncio.get_event_loop()
+            
+            def transcribe_sync():
                 try:
-                    audio_bytes, sample_rate = self.extract_pcm_from_wav(audio_bytes)
-                    mime_type = f"audio/pcm;rate={sample_rate}"
-                    logger.info(f"Extracted PCM: {len(audio_bytes)} bytes at {sample_rate}Hz")
+                    response = self.client.models.generate_content(
+                        model=settings.model_reasoning,  # Use reasoning model for better accuracy
+                        contents=[
+                            prompt,
+                            types.Part(
+                                inline_data=types.Blob(
+                                    mime_type=mime_type,
+                                    data=audio_bytes
+                                )
+                            )
+                        ]
+                    )
+                    
+                    if response and response.text:
+                        text = response.text.strip()
+                        logger.info(f"Transcription result: {text[:200]}")
+                        return text
+                    else:
+                        logger.warning("Empty response from Gemini API")
+                        return ""
+                        
                 except Exception as e:
-                    logger.warning(f"Failed to extract WAV PCM: {e}, using as-is")
+                    logger.error(f"Gemini API transcription error: {e}", exc_info=True)
+                    return ""
             
-            system_instruction = (
-                f"You are a speech-to-text transcription agent. Listen to the audio and "
-                f"transcribe exactly what you hear in {language}. Do not respond to the content, "
-                f"only transcribe the speech in the language it is spoken."
-            )
-            
-            transcription_parts = []
-            
-            async with self.connect(language=language, system_instruction=system_instruction) as session:
-                # Send entire audio at once for better results with Gemini Live
-                logger.info(f"Sending {len(audio_bytes)} bytes of audio to Gemini Live API")
-                await session.send_realtime_input(
-                    audio=types.Blob(data=audio_bytes, mime_type=mime_type)
-                )
-                
-                # Wait for model to process
-                await asyncio.sleep(1.0)
-                
-                # Collect transcriptions with timeout
-                start_time = asyncio.get_event_loop().time()
-                timeout = 10.0
-                
-                try:
-                    async for response in session.receive():
-                        elapsed = asyncio.get_event_loop().time() - start_time
-                        if elapsed > timeout:
-                            logger.info(f"STT timeout after {elapsed:.1f}s")
-                            break
-                        
-                        # Check for model turn (response from model)
-                        if response.server_content and response.server_content.model_turn:
-                            for part in response.server_content.model_turn.parts:
-                                if part.text:
-                                    transcription_parts.append(part.text)
-                                    logger.info(f"STT Transcription: {part.text}")
-                        
-                        # Check for input transcription (user's speech transcribed)
-                        elif response.server_content and hasattr(response.server_content, 'input_transcription') and response.server_content.input_transcription:
-                            if response.server_content.input_transcription.text:
-                                transcription_parts.append(response.server_content.input_transcription.text)
-                                logger.info(f"STT Input Transcription: {response.server_content.input_transcription.text}")
-                        
-                        # If we have substantial transcription, we can stop waiting
-                        combined = " ".join(transcription_parts).strip()
-                        if len(combined) > 50:
-                            logger.info(f"Got sufficient transcription: {len(combined)} chars")
-                            break
-                            
-                except asyncio.TimeoutError:
-                    logger.info("Receive timeout")
-                except Exception as e:
-                    logger.error(f"Error during transcription receive: {e}")
-            
-            result = " ".join(transcription_parts).strip()
+            result = await loop.run_in_executor(None, transcribe_sync)
             logger.info(f"Final transcription: {result[:100] if result else '(empty)'}")
             return result
             
