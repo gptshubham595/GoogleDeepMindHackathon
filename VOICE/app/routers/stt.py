@@ -1,10 +1,41 @@
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Request, Response
 from app.models.schemas import STTRequest, STTResponse, STTStreamResponse
 from app.services.stt import stt_service
 from app.services.translate import translation_service
 import asyncio
 import json
 import logging
+import base64
+
+def detect_audio_mime_type(audio_bytes: bytes) -> str:
+    """
+    Auto-detect audio MIME type from file signature (magic bytes).
+    """
+    if not audio_bytes or len(audio_bytes) < 4:
+        return "audio/pcm;rate=16000"
+    
+    # WAV file signature
+    if audio_bytes.startswith(b'RIFF') and b'WAVE' in audio_bytes[:12]:
+        return "audio/wav"
+    
+    # MP3 file signature (ID3 tag or sync frame)
+    if audio_bytes.startswith(b'ID3') or (audio_bytes[0:2] == b'\xff\xfb'):
+        return "audio/mpeg"
+    
+    # OGG Vorbis
+    if audio_bytes.startswith(b'OggS'):
+        return "audio/ogg"
+    
+    # FLAC
+    if audio_bytes.startswith(b'fLaC'):
+        return "audio/flac"
+    
+    # M4A/AAC
+    if b'ftyp' in audio_bytes[:12]:
+        return "audio/mp4"
+    
+    # Default to PCM 16kHz if unknown
+    return "audio/pcm;rate=16000"
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/stt", tags=["speech-to-text"])
@@ -38,6 +69,48 @@ async def transcribe_audio(payload: STTRequest):
         )
     except Exception as e:
         logger.error(f"STT transcription failed: {e}")
+        raise HTTPException(status_code=500, detail=f"STT transcription failed: {str(e)}")
+
+@router.post("/transcribe-bytes")
+async def transcribe_audio_bytes(request: Request, language: str = "hi-IN"):
+    """
+    Accept raw audio bytes (WAV, MP3, PCM, etc.) and return transcribed text as byte array.
+    Auto-detects audio format. Content-Type can be application/octet-stream.
+    """
+    # Read raw audio bytes from request body
+    audio_bytes = await request.body()
+    
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="No audio bytes received")
+    
+    try:
+        # Auto-detect MIME type from audio bytes
+        mime_type = detect_audio_mime_type(audio_bytes)
+        logger.info(f"Detected audio format: {mime_type}")
+        
+        # Convert to base64 for STT service
+        audio_base64 = base64.b64encode(audio_bytes).decode("utf-8")
+        
+        # Transcribe using Gemini Live API
+        transcription = await stt_service.transcribe_audio_base64(
+            audio_base64,
+            language,
+            mime_type
+        )
+        
+        if not transcription:
+            logger.warning(f"Empty transcription for {mime_type} audio")
+        
+        # Return transcribed text as byte array (UTF-8 encoded)
+        return Response(
+            content=transcription.encode("utf-8"),
+            media_type="application/octet-stream",
+            headers={"X-Detected-Language": language, "X-Audio-Format": mime_type}
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"STT bytes transcription failed: {e}")
         raise HTTPException(status_code=500, detail=f"STT transcription failed: {str(e)}")
 
 @router.websocket("/stream/{language}")

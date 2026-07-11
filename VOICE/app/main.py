@@ -493,6 +493,18 @@ DASHBOARD_HTML = """
                     <label>STT Result</label>
                     <div id="stt-result" class="result-box">Select language and click Transcribe to test STT pipeline.</div>
                 </div>
+                
+                <hr style="border: 1px solid rgba(255,255,255,0.1); margin: 0.5rem 0;">
+                
+                <div class="input-group">
+                    <label for="stt-file-input">Test STT Bytes Endpoint (Upload audio file)</label>
+                    <input type="file" id="stt-file-input" accept="audio/*,.pcm,.wav" />
+                </div>
+                <button class="btn" onclick="runSTTBytes()" style="background: #3f51b5; color: white;">Transcribe Audio Bytes</button>
+                <div class="input-group">
+                    <label>Bytes Endpoint Result</label>
+                    <div id="stt-bytes-result" class="result-box">Upload an audio file and click Transcribe Audio Bytes.</div>
+                </div>
             </div>
 
             <!-- TTS Tab -->
@@ -987,6 +999,41 @@ DASHBOARD_HTML = """
                 resBox.innerText = `STT Pipeline Test (${language}):\nDetected: ${data.detected_lang}\nEnglish: ${data.translated_text}\n\nNote: For real audio STT, use WebSocket /stt/stream/{language} or REST /stt/transcribe with audio_base64.`;
             } catch (e) {
                 resBox.innerText = "Text fallback failed: " + e;
+            }
+        }
+
+        async function runSTTBytes() {
+            const language = document.getElementById("stt-language").value;
+            const fileInput = document.getElementById("stt-file-input");
+            const resBox = document.getElementById("stt-bytes-result");
+            
+            if (!fileInput.files || fileInput.files.length === 0) {
+                resBox.innerText = "Please select an audio file first.";
+                return;
+            }
+            
+            const file = fileInput.files[0];
+            resBox.innerText = `Sending ${file.name} (${file.size} bytes) to STT bytes endpoint...`;
+            
+            try {
+                const response = await fetch(`/stt/transcribe-bytes?language=${language}`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/octet-stream" },
+                    body: file
+                });
+                
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    resBox.innerText = `Error ${response.status}: ${errorText}`;
+                    return;
+                }
+                
+                const arrayBuffer = await response.arrayBuffer();
+                const textResult = new TextDecoder("utf-8").decode(arrayBuffer);
+                
+                resBox.innerText = `File: ${file.name}\nSize: ${file.size} bytes\nLanguage: ${language}\nStatus: ${response.status}\n\nTranscribed Text (bytes decoded):\n${textResult || "(empty - possibly invalid audio or no speech detected)"}`;
+            } catch (e) {
+                resBox.innerText = "STT bytes test failed: " + e;
             }
         }
 
