@@ -2,6 +2,20 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+<<<<<<< HEAD
+=======
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" tools:ignore="QueryAllPackagesPermission" />
+
+    <!-- Audio capture / transcription -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+
+    <!-- Gemini Live API connectivity -->
+>>>>>>> d244787762e98da9e0cd4580903c464a73ed0c3d
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.RECEIVE_SMS" />
@@ -42,6 +56,28 @@
             </intent-filter>
         </service>
 
+<<<<<<< HEAD
+=======
+        <service
+            android:name=".services.OverlayService"
+            android:enabled="true"
+            android:exported="false" />
+
+        <!-- Live call / mic recording (16kHz PCM) for the STT + spam pipeline -->
+        <service
+            android:name=".call.CallRecordingService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+
+        <!-- Adding CallAudioStreamingService -->
+         <service
+            android:name=".services.CallAudioStreamingService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+
+>>>>>>> d244787762e98da9e0cd4580903c464a73ed0c3d
     </application>
 
 </manifest>

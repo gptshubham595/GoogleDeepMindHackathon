@@ -1,0 +1,14 @@
+[project]
+name = "rakshak-voice"
+version = "0.1.0"
+description = "RAKSHAK Digital Arrest Extortion Voice Backend Detector"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.29.0",
+    "websockets>=12.0",
+    "google-genai>=0.1.1",
+    "pydantic==2.8.2",
+    "pydantic-settings>=2.3.0",
+    "python-dotenv>=1.0.1",
+]
