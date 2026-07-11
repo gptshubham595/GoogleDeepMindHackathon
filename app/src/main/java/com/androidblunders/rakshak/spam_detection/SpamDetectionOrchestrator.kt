@@ -6,6 +6,9 @@ import com.androidblunders.rakshak.messaging.MessageExtractor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
@@ -14,6 +17,15 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
 import javax.inject.Singleton
+
+/** UI-facing result of a single analyzed message. */
+data class SpamDetectionResult(
+    val sender: String,
+    val messageBody: String,
+    val score: ThreatScore,
+    val status: String,
+    val timestamp: Long,
+)
 
 /**
  * SpamDetectionOrchestrator — the pipeline entry-point for SMS / notification analysis.
@@ -50,11 +62,14 @@ class SpamDetectionOrchestrator @Inject constructor(
         /** Maximum SMS messages kept in the rolling buffer. */
         private const val MAX_SMS_BUFFER = 25
 
-        // Risk thresholds (0–100 scale to match AggregatedRiskState)
-        private const val THRESHOLD_SUSPICIOUS = 35f
-        private const val THRESHOLD_WARN       = 65f
-        private const val THRESHOLD_ALERT      = 80f
-        private const val THRESHOLD_INTERVENE  = 90f
+        /** Max recent results kept in memory for the UI StateFlow. */
+        private const val MAX_RECENT = 25
+
+        // Risk thresholds (score is 0.0–1.0, multiply by 100 for display)
+        private const val THRESHOLD_SUSPICIOUS = 0.35f
+        private const val THRESHOLD_WARN       = 0.60f
+        private const val THRESHOLD_ALERT      = 0.80f
+        private const val THRESHOLD_INTERVENE  = 0.90f
     }
 
     /**
@@ -63,13 +78,17 @@ class SpamDetectionOrchestrator @Inject constructor(
      */
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
+    /** Latest analyzed message result. Observed by the dashboard / debug UI. */
+    private val _latestResult = MutableStateFlow<SpamDetectionResult?>(null)
+    val latestResult: StateFlow<SpamDetectionResult?> = _latestResult.asStateFlow()
+
+    /** Rolling log of recent results (newest first), capped for memory. */
+    private val _recentResults = MutableStateFlow<List<SpamDetectionResult>>(emptyList())
+    val recentResults: StateFlow<List<SpamDetectionResult>> = _recentResults.asStateFlow()
+
     /** Thread-safe rolling buffer of recent SMS / notification messages. */
     private val smsBuffer = mutableListOf<SMSMessage>()
     private val bufferMutex = Mutex()
-
-    // -------------------------------------------------------------------------
-    // Public API
-    // -------------------------------------------------------------------------
 
     /**
      * Begins observing [MessageExtractor.messageFlow].
@@ -158,39 +177,51 @@ class SpamDetectionOrchestrator @Inject constructor(
      * Currently writes a structured log. Hook in Room / StateFlow / Notification here.
      */
     private fun onThreatScored(ctx: CallContext, score: ThreatScore) {
-        // Scale to 0-100 for display (ThreatScore uses 0.0-1.0)
-        val scaledScore = score.score * 100f
+        val scaledScore = score.score
 
         val level = when {
-            scaledScore >= THRESHOLD_INTERVENE -> "🚨 INTERVENE"
-            scaledScore >= THRESHOLD_ALERT     -> "🔴 ALERT"
-            scaledScore >= THRESHOLD_WARN      -> "⚠️  WARN"
+            scaledScore >= THRESHOLD_INTERVENE  -> "🚨 INTERVENE"
+            scaledScore >= THRESHOLD_ALERT      -> "🔴 ALERT"
+            scaledScore >= THRESHOLD_WARN       -> "⚠️  WARN"
             scaledScore >= THRESHOLD_SUSPICIOUS -> "🟡 SUSPICIOUS"
-            else                               -> "✅ SAFE"
+            else                                -> "✅ SAFE"
         }
 
+        val latestSms = ctx.recentSmsMessages.lastOrNull()
+        val otpFlag   = if (ctx.hasOtpSms) " [OTP]" else ""
+        val upiFlag   = if (ctx.hasUpiSms) " [UPI]" else ""
         val signalStr = if (score.signals.isEmpty()) "none" else score.signals.joinToString()
-        val otpFlag   = if (ctx.hasOtpSms) " [OTP SMS present]" else ""
-        val upiFlag   = if (ctx.hasUpiSms) " [UPI SMS present]" else ""
 
-        Log.i(TAG, """
+        // Publish to StateFlow observers (UI / dashboard).
+        val result = SpamDetectionResult(
+            sender      = ctx.callerNumber,
+            messageBody = latestSms?.body ?: ctx.allSmsText.take(120),
+            score       = score,
+            status      = level,
+            timestamp   = ctx.analysisTimestampMs,
+        )
+        _latestResult.value = result
+        _recentResults.value = (listOf(result) + _recentResults.value).take(MAX_RECENT)
+
+        Log.i(
+            TAG, """
             ┌── Spam Detection Result ──────────────────────────────────
-            │  Caller      : ${ctx.callerNumber}
+            │  Caller       : ${ctx.callerNumber}
             │  Known contact: ${ctx.isKnownContact}
             │  SMS in buffer: ${ctx.recentSmsMessages.size}$otpFlag$upiFlag
-            │  Stage       : ${score.stage}
-            │  Score       : ${"%.1f".format(scaledScore)}/100
-            │  Label       : ${score.label}
-            │  Confidence  : ${"%.1f".format(score.confidence * 100)}%
-            │  Signals     : $signalStr
-            │  Status      : $level
+            │  Stage        : ${score.stage}
+            │  Score        : ${"%.0f".format(scaledScore * 100)}/100
+            │  Label        : ${score.label}
+            │  Confidence   : ${"%.1f".format(score.confidence * 100)}%
+            │  Signals      : $signalStr
+            │  Status       : $level
             └───────────────────────────────────────────────────────────
-        """.trimIndent())
+            """.trimIndent()
+        )
 
         // TODO (Phase 5): Emit to RiskAggregator instead of logging directly
         // TODO (Phase 6): Trigger InterventionEngine based on scaledScore
         // TODO: Insert into Room security_history DAO
-        // TODO: Emit via MutableStateFlow<ThreatScore> to SecurityHistoryViewModel
     }
 
     // -------------------------------------------------------------------------
