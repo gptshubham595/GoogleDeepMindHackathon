@@ -18,3 +18,5 @@ local.properties
 .kotlin
 build/
 **/build/
+__pycache__
+.env
