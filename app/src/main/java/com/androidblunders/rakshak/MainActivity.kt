@@ -47,6 +47,7 @@ class MainActivity : ComponentActivity() {
         }
 
         // 1. registerListener: Captures FUTURE messages that arrive while the app is alive.
+        //[Hareesh] Read future message's here.
         MessageExtractor.registerListener { message ->
             Log.d("RakshakPlugin", "Exposed Listener captured: ${message.content}")
         }
@@ -72,6 +73,7 @@ fun MessageExtractorUI(modifier: Modifier = Modifier) {
     LaunchedEffect(isPermissionGranted) {
         if (isPermissionGranted) {
             // Permission just granted! Pull any existing history
+            //[Hareesh] Read historic message's here.
             val history = MessageExtractor.getLast25Messages()
             messages.clear()
             messages.addAll(history)
