@@ -52,6 +52,19 @@ async def ws_call_endpoint(websocket: WebSocket, call_id: str):
                     return
                 async with analysis_lock:
                     logger.info(f"[{call_id}] Live Transcript chunk: {text_chunk}")
+                    # STT is latency-sensitive: send recognized speech to Android
+                    # immediately. Translation and threat classification can take
+                    # several network round trips and must not hide the transcript.
+                    pending_full_transcript = " ".join(
+                        part for part in (call_state.get_full_transcript(), text_chunk) if part
+                    )
+                    await websocket.send_json({
+                        "event": "transcript_update",
+                        "transcript_chunk": text_chunk,
+                        "full_transcript": pending_full_transcript,
+                        "threat_score": call_state.threat_score,
+                        "state": call_state.state,
+                    })
                     translated_chunk, detected_lang = await translation_service.translate_text(text_chunk)
                     await call_state.add_transcript(text_chunk, translated_chunk)
 
@@ -82,12 +95,10 @@ async def ws_call_endpoint(websocket: WebSocket, call_id: str):
                             "threat_score": score,
                             "matched_keywords": [s["reason"] for s in segments],
                             "warning_audio": audio_warning_b64,
-                            "transcript_chunk": text_chunk,
                         })
                     else:
                         await websocket.send_json({
-                            "event": "transcript_update",
-                            "transcript_chunk": text_chunk,
+                            "event": "analysis_update",
                             "full_transcript": call_state.get_full_transcript(),
                             "threat_score": score,
                             "state": call_state.state,
